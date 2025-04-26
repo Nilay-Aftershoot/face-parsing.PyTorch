@@ -14,17 +14,18 @@ import cv2
 
 from transform import *
 
-
+IMG_DIR = "complex_segmentation_img"
+MASK_DIR = "complex_segmentation_mask"
 
 class FaceMask(Dataset):
-    def __init__(self, rootpth, cropsize=(640, 480), mode='train', *args, **kwargs):
+    def __init__(self, rootpth="/workspace/bisenet_training", cropsize=(640, 480), mode='train', *args, **kwargs):
         super(FaceMask, self).__init__(*args, **kwargs)
         assert mode in ('train', 'val', 'test')
         self.mode = mode
         self.ignore_lb = 255
         self.rootpth = rootpth
 
-        self.imgs = os.listdir(os.path.join(self.rootpth, 'CelebA-HQ-img'))
+        self.imgs = os.listdir(os.path.join(self.rootpth, IMG_DIR))
 
         #  pre-processing
         self.to_tensor = transforms.Compose([
@@ -43,9 +44,9 @@ class FaceMask(Dataset):
 
     def __getitem__(self, idx):
         impth = self.imgs[idx]
-        img = Image.open(osp.join(self.rootpth, 'CelebA-HQ-img', impth))
+        img = Image.open(osp.join(self.rootpth, IMG_DIR, impth))
         img = img.resize((512, 512), Image.BILINEAR)
-        label = Image.open(osp.join(self.rootpth, 'mask', impth[:-3]+'png')).convert('P')
+        label = Image.open(osp.join(self.rootpth, MASK_DIR, impth[:-3]+'png')).convert('P')
         # print(np.unique(np.array(label)))
         if self.mode == 'train':
             im_lb = dict(im=img, lb=label)
@@ -60,47 +61,36 @@ class FaceMask(Dataset):
 
 
 if __name__ == "__main__":
-    face_data = '/home/zll/data/CelebAMask-HQ/CelebA-HQ-img'
-    face_sep_mask = '/home/zll/data/CelebAMask-HQ/CelebAMask-HQ-mask-anno'
-    mask_path = '/home/zll/data/CelebAMask-HQ/mask'
-    counter = 0
-    total = 0
-    for i in range(15):
-        # files = os.listdir(osp.join(face_sep_mask, str(i)))
+    # face_data = '/home/zll/data/CelebAMask-HQ/CelebA-HQ-img'
+    # face_sep_mask = '/home/zll/data/CelebAMask-HQ/CelebAMask-HQ-mask-anno'
+    # mask_path = '/home/zll/data/CelebAMask-HQ/mask'
+    # counter = 0
+    # total = 0
+    # for i in range(15):
+    #     # files = os.listdir(osp.join(face_sep_mask, str(i)))
 
-        atts = ['skin', 'l_brow', 'r_brow', 'l_eye', 'r_eye', 'eye_g', 'l_ear', 'r_ear', 'ear_r',
-                'nose', 'mouth', 'u_lip', 'l_lip', 'neck', 'neck_l', 'cloth', 'hair', 'hat']
+    #     atts = ['skin', 'l_brow', 'r_brow', 'l_eye', 'r_eye', 'eye_g', 'l_ear', 'r_ear', 'ear_r',
+    #             'nose', 'mouth', 'u_lip', 'l_lip', 'neck', 'neck_l', 'cloth', 'hair', 'hat']
 
-        for j in range(i*2000, (i+1)*2000):
+    #     for j in range(i*2000, (i+1)*2000):
 
-            mask = np.zeros((512, 512))
+    #         mask = np.zeros((512, 512))
 
-            for l, att in enumerate(atts, 1):
-                total += 1
-                file_name = ''.join([str(j).rjust(5, '0'), '_', att, '.png'])
-                path = osp.join(face_sep_mask, str(i), file_name)
+    #         for l, att in enumerate(atts, 1):
+    #             total += 1
+    #             file_name = ''.join([str(j).rjust(5, '0'), '_', att, '.png'])
+    #             path = osp.join(face_sep_mask, str(i), file_name)
 
-                if os.path.exists(path):
-                    counter += 1
-                    sep_mask = np.array(Image.open(path).convert('P'))
-                    # print(np.unique(sep_mask))
+    #             if os.path.exists(path):
+    #                 counter += 1
+    #                 sep_mask = np.array(Image.open(path).convert('P'))
+    #                 # print(np.unique(sep_mask))
 
-                    mask[sep_mask == 225] = l
-            cv2.imwrite('{}/{}.png'.format(mask_path, j), mask)
-            print(j)
+    #                 mask[sep_mask == 225] = l
+    #         cv2.imwrite('{}/{}.png'.format(mask_path, j), mask)
+    #         print(j)
 
-    print(counter, total)
+    # print(counter, total)
 
-
-
-
-
-
-
-
-
-
-
-
-
+    print("FaceMask dataset caller")
 
