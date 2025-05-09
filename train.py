@@ -22,13 +22,18 @@ import logging
 import time
 import datetime
 import argparse
+from tqdm import tqdm
+import json
 
-
-respth = './res'
+respth = './res_distributed'
 if not osp.exists(respth):
     os.makedirs(respth)
 logger = logging.getLogger()
 
+# Create checkpoints directory
+checkpoint_dir = osp.join(respth, 'checkpoints')
+if not osp.exists(checkpoint_dir):
+    os.makedirs(checkpoint_dir)
 
 def parse_args():
     parse = argparse.ArgumentParser()
@@ -38,18 +43,52 @@ def parse_args():
             type = int,
             default = -1,
             )
+    parse.add_argument(
+            '--save_interval',
+            dest = 'save_interval',
+            type = int,
+            default = 5000,
+            help = 'Interval to save model checkpoints'
+            )
+    parse.add_argument(
+            '--eval_interval',
+            dest = 'eval_interval',
+            type = int,
+            default = 1000,
+            help = 'Interval to evaluate model'
+            )
     return parse.parse_args()
 
+def save_checkpoint(net, optimizer, epoch, iteration, loss, is_best=False, filename='checkpoint.pth'):
+    checkpoint = {
+        'epoch': epoch,
+        'iteration': iteration,
+        'model_state_dict': net.module.state_dict() if hasattr(net, 'module') else net.state_dict(),
+        'optimizer_state_dict': optimizer.optim.state_dict(),
+        'optimizer_it': optimizer.it,
+        'loss': loss,
+    }
+    
+    # Save regular checkpoint
+    checkpoint_path = osp.join(checkpoint_dir, filename)
+    torch.save(checkpoint, checkpoint_path)
+    
+    # Save best model if it's the best so far
+    if is_best:
+        best_model_path = osp.join(checkpoint_dir, 'best_model.pth')
+        torch.save(checkpoint, best_model_path)
+        logger.info(f'Saved best model with loss: {loss:.4f}')
+
+def load_checkpoint(net, optimizer, checkpoint_path):
+    checkpoint = torch.load(checkpoint_path)
+    net.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.optim.load_state_dict(checkpoint['optimizer_state_dict'])
+    optimizer.it = checkpoint['optimizer_it']
+    return checkpoint['epoch'], checkpoint['iteration'], checkpoint['loss']
 
 def train():
     args = parse_args()
     torch.cuda.set_device(args.local_rank)
-    dist.init_process_group(
-                backend = 'nccl',
-                init_method = 'tcp://127.0.0.1:33241',
-                world_size = torch.cuda.device_count(),
-                rank=args.local_rank
-                )
     setup_logger(respth)
 
     # dataset
@@ -57,13 +96,13 @@ def train():
     n_img_per_gpu = 16
     n_workers = 8
     cropsize = [448, 448]
-    data_root = '/workspace/bisenet_training'
+    data_root = '/workspace/bisenet_training/complex_seg_bisenet'
 
     ds = FaceMask(data_root, cropsize=cropsize, mode='train')
-    sampler = torch.utils.data.distributed.DistributedSampler(ds)
+    sampler = None
     dl = DataLoader(ds,
                     batch_size = n_img_per_gpu,
-                    shuffle = False,
+                    shuffle = True,
                     sampler = sampler,
                     num_workers = n_workers,
                     pin_memory = True,
@@ -74,10 +113,7 @@ def train():
     net = BiSeNet(n_classes=n_classes)
     net.cuda()
     net.train()
-    net = nn.parallel.DistributedDataParallel(net,
-            device_ids = [args.local_rank, ],
-            output_device = args.local_rank
-            )
+
     score_thres = 0.7
     n_min = n_img_per_gpu * cropsize[0] * cropsize[1]//16
     LossP = OhemCELoss(thresh=score_thres, n_min=n_min, ignore_lb=ignore_idx)
@@ -93,7 +129,7 @@ def train():
     warmup_steps = 1000
     warmup_start_lr = 1e-5
     optim = Optimizer(
-            model = net.module,
+            model = net,
             lr0 = lr_start,
             momentum = momentum,
             wd = weight_decay,
@@ -103,11 +139,16 @@ def train():
             power = power)
 
     ## train loop
-    msg_iter = 50
+    msg_iter = 500
     loss_avg = []
     st = glob_st = time.time()
     diter = iter(dl)
     epoch = 0
+    best_loss = float('inf')
+    
+    # Training progress bar
+    pbar = tqdm(total=max_iter, desc='Training Progress')
+    
     for it in range(max_iter):
         try:
             im, lb = next(diter)
@@ -115,7 +156,6 @@ def train():
                 raise StopIteration
         except StopIteration:
             epoch += 1
-            sampler.set_epoch(epoch)
             diter = iter(dl)
             im, lb = next(diter)
         im = im.cuda()
@@ -133,6 +173,34 @@ def train():
         optim.step()
 
         loss_avg.append(loss.item())
+        current_loss = loss.item()
+
+        # Update progress bar
+        pbar.update(1)
+        pbar.set_postfix({'loss': f'{current_loss:.4f}', 'epoch': epoch})
+
+        # Save checkpoint
+        if (it + 1) % args.save_interval == 0:
+            is_best = current_loss < best_loss
+            if is_best:
+                best_loss = current_loss
+            save_checkpoint(
+                net, 
+                optim, 
+                epoch, 
+                it, 
+                current_loss, 
+                is_best=is_best,
+                filename=f'checkpoint_{it+1}.pth'
+            )
+
+        # Evaluate model
+        if (it + 1) % args.eval_interval == 0:
+            net.eval()
+            with torch.no_grad():
+                # Add your evaluation code here
+                pass
+            net.train()
 
         #  print training log message
         if (it+1) % msg_iter == 0:
@@ -159,21 +227,14 @@ def train():
             logger.info(msg)
             loss_avg = []
             st = ed
-        if dist.get_rank() == 0:
-            if (it+1) % 5000 == 0:
-                state = net.module.state_dict() if hasattr(net, 'module') else net.state_dict()
-                if dist.get_rank() == 0:
-                    torch.save(state, './res/cp/{}_iter.pth'.format(it))
-                # evaluate(dspth='/home/zll/data/CelebAMask-HQ/test-img', cp='{}_iter.pth'.format(it))
 
-    #  dump the final model
+    pbar.close()
+    
+    # Save final model
     save_pth = osp.join(respth, 'model_final_diss.pth')
-    # net.cpu()
     state = net.module.state_dict() if hasattr(net, 'module') else net.state_dict()
-    if dist.get_rank() == 0:
-        torch.save(state, save_pth)
+    torch.save(state, save_pth)
     logger.info('training done, model saved to: {}'.format(save_pth))
-
 
 if __name__ == "__main__":
     train()
