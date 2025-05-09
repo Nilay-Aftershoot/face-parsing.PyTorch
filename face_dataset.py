@@ -14,11 +14,11 @@ import cv2
 
 from transform import *
 
-IMG_DIR = "complex_segmentation_img"
-MASK_DIR = "complex_segmentation_mask"
+IMG_DIR = "reduced_complex_segmentation_img/batch_1"
+MASK_DIR = "reduced_complex_segmentation_single_channel_mask/batch_1"
 
 class FaceMask(Dataset):
-    def __init__(self, rootpth="/workspace/bisenet_training", cropsize=(640, 480), mode='train', *args, **kwargs):
+    def __init__(self, rootpth="/workspace/bisenet_training/complex_seg_bisenet", cropsize=(640, 480), mode='train', *args, **kwargs):
         super(FaceMask, self).__init__(*args, **kwargs)
         assert mode in ('train', 'val', 'test')
         self.mode = mode
@@ -44,9 +44,10 @@ class FaceMask(Dataset):
 
     def __getitem__(self, idx):
         impth = self.imgs[idx]
+        # print(f"impth: {impth}, impth[:-3]: {os.path.splitext(impth)[0]}")
         img = Image.open(osp.join(self.rootpth, IMG_DIR, impth))
         img = img.resize((512, 512), Image.BILINEAR)
-        label = Image.open(osp.join(self.rootpth, MASK_DIR, impth[:-3]+'png')).convert('P')
+        label = Image.open(osp.join(self.rootpth, MASK_DIR, os.path.splitext(impth)[0]+'_single_channel.png')).convert('P')
         # print(np.unique(np.array(label)))
         if self.mode == 'train':
             im_lb = dict(im=img, lb=label)
